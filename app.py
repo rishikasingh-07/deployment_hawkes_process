@@ -296,7 +296,7 @@ def make_plot(centers, etas, hyp_time, conf_time, seizure_start, channel):
 
 st.markdown("""
 <div class="title-block">
-  <h1>⚡ HAWKES SEIZURE DETECTION</h1>
+  <h1>HAWKES SEIZURE DETECTION</h1>
   <p>Stochastic Modeling for Early Seizure Warning using EEG Data &nbsp;·&nbsp; Rishika Singh</p>
 </div>
 """, unsafe_allow_html=True)
