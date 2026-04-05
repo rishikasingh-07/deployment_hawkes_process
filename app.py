@@ -1,5 +1,4 @@
 import streamlit as st
-import numpy as np
 import matplotlib.pyplot as plt
 import mne
 import tempfile
@@ -7,41 +6,23 @@ import tempfile
 from hawkes_core import (
     eeg_to_spikes,
     sliding_window_eta,
-    adaptive_window_detection
+    adaptive_window_detection,
+    critical_threshold_warning
 )
 
 st.set_page_config(layout="centered")
 
-# ---------------- TITLE ----------------
 st.title("Hawkes Process Seizure Detection")
 
 st.markdown("""
-<div style='text-align:center; font-size:16px; color:#6b7280; margin-bottom:20px;'>
-Stochastic Modeling for Early Seizure Warning
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ---------------- INSTRUCTIONS ----------------
-st.markdown("""
 ### Instructions
 
-1. Download an EEG `.edf` file from the CHB-MIT dataset  
-2. Upload the file below  
-3. Select a channel  
-4. (Optional) Enter seizure start time  
-
-**How to find seizure time:**
-- Open the `summary.txt` file  
-- Look for: `Seizure Start Time: XXXX seconds`  
-
-Then click **Run Analysis**
+1. Download EEG (.edf) from CHB-MIT dataset  
+2. Upload below  
+3. Select channel  
+4. (Optional) enter seizure start time  
 """)
 
-st.markdown("---")
-
-# ---------------- UPLOAD ----------------
 uploaded_file = st.file_uploader("Upload EEG (.edf)", type=["edf"])
 
 if uploaded_file:
@@ -51,72 +32,94 @@ if uploaded_file:
         temp_path = tmp.name
 
     raw = mne.io.read_raw_edf(temp_path, preload=True, verbose=False)
-
-    st.success("EEG loaded successfully")
+    st.success("EEG loaded")
 
     channel = st.selectbox("Select Channel", raw.ch_names)
 
-    seizure_input = st.text_input("Seizure Start Time (optional, in seconds)")
+    seizure_input = st.text_input("Seizure Start Time (optional)")
 
     seizure_start = None
-    if seizure_input.strip() != "":
-        try:
-            seizure_start = float(seizure_input)
-        except:
-            st.warning("Invalid seizure time format")
-
-    st.markdown("---")
+    if seizure_input.strip():
+        seizure_start = float(seizure_input)
 
     if st.button("Run Analysis"):
 
-        with st.spinner("Running Hawkes model..."):
+        T_total = raw.times[-1]
 
-            T_total = raw.times[-1]
-            spikes = eeg_to_spikes(raw, channel)
+        spikes = eeg_to_spikes(raw, channel)
 
-            if len(spikes) < 20:
-                st.error("Not enough spikes detected")
+        if len(spikes) < 50:
+            st.error("Not enough spikes")
+        else:
+
+            # -------- ORIGINAL DETECTION --------
+            hyp_time, conf_time, status, prob, rejected = \
+                adaptive_window_detection(spikes, T_total)
+
+            # -------- ALSO CHECK SUPERCRITICAL --------
+            centers, etas = sliding_window_eta(spikes, T_total)
+
+            mask = centers > 300
+            centers = centers[mask]
+            etas = etas[mask]
+
+            critical_time = critical_threshold_warning(centers, etas)
+
+            # -------- RESULT LOGIC (THIS WAS MISSING) --------
+            final_status = status
+            final_time = hyp_time
+
+            if status == "confirmed":
+                final_status = "confirmed"
+
+            elif status == "rejected":
+                final_status = "rejected"
+
+            elif critical_time:
+                final_status = "supercritical"
+                final_time = critical_time
+
             else:
+                final_status = "no_detection"
 
-                hyp_time, conf_time, status, prob, rejected = \
-                    adaptive_window_detection(spikes, T_total)
+            # -------- DISPLAY --------
+            st.markdown("### Detection Summary")
 
-                st.markdown("### Detection Summary")
+            st.write(f"**Status:** {final_status}")
 
-                st.write(f"**Status:** {status}")
+            if final_status == "confirmed":
+                st.write(f"Confidence: {prob:.2f}")
+                st.write(f"Warning Time: {hyp_time}")
+                st.write(f"Confirmation Time: {conf_time}")
 
-                if status == "confirmed":
-                    st.write(f"**Confidence Score:** {prob:.2f}")
-                    st.write(f"**Early Warning Time:** {hyp_time} s")
-                    st.write(f"**Confirmation Time:** {conf_time} s")
+            elif final_status == "rejected":
+                st.warning("Transient detected — correctly rejected")
+                st.write(f"Rejected at: {hyp_time}")
+                st.write(f"Final P: {prob:.2f}")
 
-                elif status == "rejected":
-                    st.warning("Detection rejected (transient activity)")
-                    st.write(f"Rejected at: {hyp_time} s")
-                    st.write(f"Final Probability: {prob:.2f}")
+            elif final_status == "supercritical":
+                st.error("η ≥ 1.0 — system unstable")
+                st.write(f"Time: {critical_time}")
 
-                else:
-                    st.info("No significant detection found")
+            else:
+                st.info("No detection")
 
-                if seizure_start is not None and hyp_time is not None:
-                    lead = seizure_start - hyp_time
+            # -------- VALIDATION --------
+            if seizure_start and final_time:
+                lead = seizure_start - final_time
 
-                    st.markdown("### Validation")
-                    st.write(f"**Actual Seizure Time:** {seizure_start} s")
-                    st.write(f"**Early Warning Lead:** {lead:.2f} seconds")
+                st.markdown("### Validation")
+                st.write(f"Actual seizure: {seizure_start}")
+                st.write(f"Lead time: {lead:.2f} sec")
 
-                st.markdown("---")
+            # -------- PLOT --------
+            fig, ax = plt.subplots(figsize=(6,3))
+            ax.plot(centers, etas)
 
-                centers, etas = sliding_window_eta(spikes, T_total)
+            if hyp_time:
+                ax.axvline(hyp_time, color='orange')
 
-                fig, ax = plt.subplots(figsize=(7,3))
-                ax.plot(centers, etas)
+            if seizure_start:
+                ax.axvline(seizure_start, color='red')
 
-                if hyp_time:
-                    ax.axvline(hyp_time, color='orange', label='Warning')
-
-                if seizure_start:
-                    ax.axvline(seizure_start, color='red', label='Seizure')
-
-                ax.legend()
-                st.pyplot(fig)
+            st.pyplot(fig)
