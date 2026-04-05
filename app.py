@@ -10,7 +10,7 @@ from hawkes_core import (
     adaptive_window_detection
 )
 
-st.set_page_config(page_title="Hawkes Detection", layout="wide")
+st.set_page_config(layout="wide")
 
 # ---------- CSS ----------
 st.markdown("""
@@ -19,36 +19,50 @@ st.markdown("""
 
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
-    background-color: #f4f6fb;
 }
 
 /* Header */
 .header {
-    font-size: 32px;
-    font-weight: 600;
-    color: #6d28d9;
-    margin-bottom: 10px;
-}
-
-.subheader {
-    color: #64748b;
+    text-align: center;
     margin-bottom: 30px;
 }
+.header h1 {
+    color: #7c3aed;
+    font-size: 40px;
+}
+.header p {
+    color: #6b7280;
+}
 
-/* Cards */
+/* Card */
 .card {
     background: white;
-    padding: 20px;
-    border-radius: 14px;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+    padding: 25px;
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.06);
     margin-bottom: 20px;
 }
 
-/* Metrics */
-.metric {
+/* Section title */
+.section-title {
     font-size: 20px;
     font-weight: 600;
-    color: #111827;
+    margin-bottom: 10px;
+    color: #374151;
+}
+
+/* Metrics */
+.metric-box {
+    text-align: center;
+    padding: 20px;
+    border-radius: 14px;
+    background: #ffffff;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+}
+
+.metric-value {
+    font-size: 22px;
+    font-weight: 600;
 }
 
 .metric-label {
@@ -61,106 +75,107 @@ html, body, [class*="css"] {
     width: 100%;
     background: linear-gradient(135deg, #7c3aed, #a78bfa);
     color: white;
-    border-radius: 10px;
-    padding: 12px;
+    border-radius: 12px;
+    padding: 14px;
     font-weight: 600;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------- HEADER ----------
-st.markdown('<div class="header">Hawkes Seizure Detection</div>', unsafe_allow_html=True)
-st.markdown('<div class="subheader">Modeling neural instability using stochastic processes</div>', unsafe_allow_html=True)
+st.markdown("""
+<div class="header">
+    <h1>Hawkes Process Seizure Detection</h1>
+    <p>Modeling neural instability using stochastic processes</p>
+</div>
+""", unsafe_allow_html=True)
 
-# ---------- SIDEBAR ----------
-st.sidebar.title("Controls")
+# ---------- INPUT SECTION ----------
+st.markdown('<div class="card">', unsafe_allow_html=True)
 
-uploaded_file = st.sidebar.file_uploader("Upload EEG (.edf)", type=["edf"])
+col1, col2 = st.columns(2)
 
-channel = None
-seizure_start = None
-use_seizure = False
+with col1:
+    st.markdown('<div class="section-title">Upload EEG</div>', unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("Upload .edf file", type=["edf"])
 
+with col2:
+    st.markdown('<div class="section-title">Settings</div>', unsafe_allow_html=True)
+    use_seizure = st.checkbox("Provide seizure time")
+    seizure_start = None
+    if use_seizure:
+        seizure_start = st.number_input("Seizure time (seconds)", min_value=0.0)
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------- PROCESS ----------
 if uploaded_file:
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".edf") as tmp:
         tmp.write(uploaded_file.read())
         temp_path = tmp.name
 
     raw = mne.io.read_raw_edf(temp_path, preload=True, verbose=False)
 
-    st.sidebar.success("Loaded")
+    st.success("EEG loaded")
 
-    channel = st.sidebar.selectbox("Channel", raw.ch_names)
+    channel = st.selectbox("Select Channel", raw.ch_names)
 
-    use_seizure = st.sidebar.checkbox("Add seizure time")
+    if st.button("Run Analysis"):
 
-    if use_seizure:
-        seizure_start = st.sidebar.number_input("Seizure time (sec)", min_value=0.0)
+        with st.spinner("Running Hawkes model..."):
 
-run = st.sidebar.button("Run Analysis")
+            T_total = raw.times[-1]
+            spikes = eeg_to_spikes(raw, channel)
 
-# ---------- MAIN AREA ----------
-if uploaded_file and run:
+            if len(spikes) < 20:
+                st.error("Not enough spikes")
+            else:
 
-    with st.spinner("Running full Hawkes model..."):
+                hyp_time, conf_time, status, prob, _ = \
+                    adaptive_window_detection(spikes, T_total)
 
-        T_total = raw.times[-1]
-        spikes = eeg_to_spikes(raw, channel)
+                centers, etas = sliding_window_eta(
+                    spikes, T_total,
+                    window_size=200,
+                    step_size=50
+                )
 
-        if len(spikes) < 20:
-            st.error("Not enough spikes detected")
-        else:
+                # ---------- METRICS ----------
+                col1, col2, col3, col4 = st.columns(4)
 
-            hyp_time, conf_time, status, prob, _ = \
-                adaptive_window_detection(spikes, T_total)
+                col1.markdown(f"<div class='metric-box'><div class='metric-value'>{status}</div><div class='metric-label'>Status</div></div>", unsafe_allow_html=True)
+                col2.markdown(f"<div class='metric-box'><div class='metric-value'>{prob:.2f}</div><div class='metric-label'>Probability</div></div>", unsafe_allow_html=True)
+                col3.markdown(f"<div class='metric-box'><div class='metric-value'>{hyp_time}</div><div class='metric-label'>Warning Time</div></div>", unsafe_allow_html=True)
+                col4.markdown(f"<div class='metric-box'><div class='metric-value'>{conf_time}</div><div class='metric-label'>Confirm Time</div></div>", unsafe_allow_html=True)
 
-            centers, etas = sliding_window_eta(
-                spikes, T_total,
-                window_size=200,
-                step_size=50
-            )
+                # ---------- VALIDATION ----------
+                if use_seizure and seizure_start and hyp_time:
+                    lead = seizure_start - hyp_time
 
-            # ---------- METRICS ----------
-            col1, col2, col3, col4 = st.columns(4)
+                    st.markdown('<div class="card">', unsafe_allow_html=True)
+                    st.markdown("### Validation")
 
-            col1.markdown(f"<div class='metric'>{status}</div><div class='metric-label'>Status</div>", unsafe_allow_html=True)
-            col2.markdown(f"<div class='metric'>{prob:.2f}</div><div class='metric-label'>Probability</div>", unsafe_allow_html=True)
-            col3.markdown(f"<div class='metric'>{hyp_time}</div><div class='metric-label'>Warning Time</div>", unsafe_allow_html=True)
-            col4.markdown(f"<div class='metric'>{conf_time}</div><div class='metric-label'>Confirm Time</div>", unsafe_allow_html=True)
+                    st.write(f"Model Warning: {hyp_time:.2f} s")
+                    st.write(f"Actual Seizure: {seizure_start:.2f} s")
+                    st.write(f"Lead Time: {lead:.2f} s")
 
-            # ---------- VALIDATION ----------
-            if use_seizure and seizure_start and hyp_time:
-                lead = seizure_start - hyp_time
+                    st.markdown('</div>', unsafe_allow_html=True)
 
-                st.markdown("<div class='card'>", unsafe_allow_html=True)
-                st.subheader("Validation")
+                # ---------- GRAPH ----------
+                st.markdown('<div class="card">', unsafe_allow_html=True)
 
-                st.write(f"Model Warning: {hyp_time:.2f} s")
-                st.write(f"Actual Seizure: {seizure_start:.2f} s")
-                st.write(f"Lead Time: {lead:.2f} s")
+                fig, ax = plt.subplots(figsize=(12,4))
+                ax.plot(centers, etas, color="#7c3aed", linewidth=2)
 
-                if lead > 0:
-                    st.success("Early detection")
-                else:
-                    st.warning("Late detection")
+                if hyp_time:
+                    ax.axvline(hyp_time, color='orange')
 
-                st.markdown("</div>", unsafe_allow_html=True)
+                if use_seizure and seizure_start:
+                    ax.axvline(seizure_start, color='red')
 
-            # ---------- GRAPH ----------
-            st.markdown("<div class='card'>", unsafe_allow_html=True)
+                ax.set_title("Branching Ratio η")
 
-            fig, ax = plt.subplots(figsize=(12,4))
-            ax.plot(centers, etas, color="#7c3aed", linewidth=2)
+                st.pyplot(fig)
 
-            if hyp_time:
-                ax.axvline(hyp_time, color='orange', label='Warning')
-
-            if use_seizure and seizure_start:
-                ax.axvline(seizure_start, color='red', label='Seizure')
-
-            ax.set_title("Branching Ratio η")
-            ax.legend()
-
-            st.pyplot(fig)
-
-            st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
