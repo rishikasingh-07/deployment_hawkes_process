@@ -421,12 +421,15 @@ if run and raw is not None:
         </div>""", unsafe_allow_html=True)
 
     elif rejected:
+        r = rejected[-1]
         st.markdown(f"""
         <div class="msg-box">
-          Transient neural activity detected and automatically rejected
-          by probabilistic verification.<br>
-          Rejected at t={rejected[-1]:.0f}s &nbsp;·&nbsp; Final P(seizure) = {prob:.2f}
-        </div>""", unsafe_allow_html=True)
+          <strong>REJECTED</strong><br><br>
+          Hypothesis raised at t={r['hypothesis']:.0f}s<br>
+          Rejected at t={r['rejected_at']:.0f}s &nbsp;·&nbsp; P(seizure) = {r['final_p']:.2f}<br><br>
+          Transient neural activity correctly suppressed
+        </div>
+        """, unsafe_allow_html=True)
 
     elif hyp_time and status == 'uncertain':
         st.markdown(f"""
