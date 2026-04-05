@@ -3,7 +3,49 @@ from scipy.optimize import minimize
 import mne
 
 # ============================================================
-# LOG LIKELIHOOD
+# EEG → SPIKES
+# ============================================================
+
+def eeg_to_spikes(raw, channel, low_freq=80, high_freq=120,
+                  threshold_std=3.0):
+
+    sfreq = raw.info['sfreq']
+
+    raw_filtered = raw.copy().filter(
+        low_freq, high_freq, picks=[channel], verbose=False
+    )
+
+    data = raw_filtered.get_data()[raw.ch_names.index(channel)]
+
+    window_samples = int(60 * sfreq)
+    normalized = np.zeros_like(data)
+
+    for i in range(0, len(data), window_samples):
+        chunk = data[i:i + window_samples]
+        if np.std(chunk) > 0:
+            normalized[i:i + window_samples] = (
+                (chunk - np.mean(chunk)) / np.std(chunk)
+            )
+
+    above = np.abs(normalized) > threshold_std
+    crossings = np.where(np.diff(above.astype(int)) == 1)[0]
+
+    if len(crossings) == 0:
+        return np.array([])
+
+    spike_times = crossings / sfreq
+
+    # refractory 50ms
+    filtered = [spike_times[0]]
+    for t in spike_times[1:]:
+        if t - filtered[-1] > 0.05:
+            filtered.append(t)
+
+    return np.array(filtered)
+
+
+# ============================================================
+# HAWKES LOG LIKELIHOOD
 # ============================================================
 
 def hawkes_log_likelihood(params, events, T):
@@ -35,7 +77,7 @@ def hawkes_log_likelihood(params, events, T):
 
 
 # ============================================================
-# MLE FIT
+# FIT HAWKES
 # ============================================================
 
 def fit_hawkes(events, T, n_restarts=10):
@@ -134,7 +176,7 @@ def probabilistic_verification(alert_centers, alert_etas,
 
 
 # ============================================================
-# FINAL FIXED DETECTION FUNCTION
+# FINAL DETECTION (FIXED)
 # ============================================================
 
 def adaptive_window_detection(events, T_total,
@@ -155,7 +197,6 @@ def adaptive_window_detection(events, T_total,
         step_size=normal_step
     )
 
-    # skip early unstable region
     mask = centers > 300
     centers = centers[mask]
     etas = etas[mask]
@@ -187,7 +228,6 @@ def adaptive_window_detection(events, T_total,
 
             hypothesis_time = centers[i - hypothesis_consecutive + 1]
 
-            # Stage 2
             alert_centers, alert_etas = sliding_window_eta(
                 events, T_total,
                 window_size=alert_window,
@@ -216,12 +256,11 @@ def adaptive_window_detection(events, T_total,
             elif status == "rejected":
                 rejected_cases.append((hypothesis_time, prob))
                 count = 0
-                i += 5   # 🔥 skip forward to avoid same detection
+                i += 5
                 continue
 
         i += 1
 
-    # fallback
     if rejected_cases:
         last = rejected_cases[-1]
         return last[0], None, "rejected", last[1], rejected_cases
