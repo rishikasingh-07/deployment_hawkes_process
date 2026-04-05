@@ -1,5 +1,5 @@
-streamlit
-numpy
-matplotlib
-scipy
-mne
+streamlit>=1.32.0
+mne>=1.0.0
+numpy>=1.21.0
+scipy>=1.7.0
+matplotlib>=3.4.0
