@@ -44,11 +44,19 @@ with st.expander("Instructions"):
     """)
 
 # ---------- UPLOAD ----------
+import tempfile
+
 uploaded_file = st.file_uploader("Upload EEG (.edf)", type=["edf"])
 
 if uploaded_file:
 
-    raw = mne.io.read_raw_edf(uploaded_file, preload=True, verbose=False)
+    # Save uploaded file to a temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".edf") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        temp_path = tmp_file.name
+
+    # Now load with MNE
+    raw = mne.io.read_raw_edf(temp_path, preload=True, verbose=False)
 
     st.success("File loaded successfully")
 
