@@ -241,7 +241,8 @@ def adaptive_window_detection(events, T_total,
                     step_size=alert_step
                 )
 
-                mask2 = alert_centers > centers[i]
+                t_hypothesis = hypothesis_time
+                mask2 = alert_centers > t_hypothesis
                 alert_centers = alert_centers[mask2]
                 alert_etas = alert_etas[mask2]
 
