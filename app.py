@@ -233,7 +233,7 @@ def run_detection(events, T_total, progress_cb=None):
                 elif status == 'rejected':
                     print(f"  REJECTED at t={vt:.0f}s"
                           f" — P(seizure)={fp:.2f} transient")
-                    rejected_times.append({
+                    rejected.append({
                         'hypothesis': hyp_time,  # t=1750
                         'rejected_at': vt,     # t=1910
                         'final_p': fp              # 0.09
