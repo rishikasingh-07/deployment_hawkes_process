@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.DS_Store
+
+.env
+venv/
+.env/
+
+*.edf
+*.png
+results_*.txt
