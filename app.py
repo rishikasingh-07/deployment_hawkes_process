@@ -15,55 +15,36 @@ st.set_page_config(layout="centered")
 # ---------------- UI POLISH ----------------
 st.markdown("""
 <style>
-
-/* Font */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
 
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
 }
 
-/* Title */
 h1 {
     font-weight: 700;
     letter-spacing: -0.5px;
 }
 
-/* Section headings */
-h3 {
-    font-weight: 600;
-    margin-top: 20px;
-}
-
-/* Spacing */
 .block-container {
     padding-top: 2rem;
     padding-bottom: 2rem;
 }
 
-/* Divider */
 hr {
     border: none;
     border-top: 1px solid #e5e7eb;
     margin: 25px 0;
 }
 
-/* Buttons */
 .stButton > button {
     font-weight: 600;
     border-radius: 8px;
 }
 
-/* Inputs */
-input, select {
-    border-radius: 6px !important;
-}
-
-/* Highlight important values */
 strong {
     color: #7c3aed;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -88,9 +69,8 @@ st.markdown("""
 4. (Optional) Enter seizure start time  
 
 **How to find seizure time:**
-- Open the `summary.txt` file from the dataset  
+- Open the `summary.txt` file  
 - Look for: `Seizure Start Time: XXXX seconds`  
-- Enter that value below  
 
 Then click **Run Analysis**
 """)
@@ -102,7 +82,6 @@ uploaded_file = st.file_uploader("Upload EEG (.edf)", type=["edf"])
 
 if uploaded_file:
 
-    # Save temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".edf") as tmp:
         tmp.write(uploaded_file.read())
         temp_path = tmp.name
@@ -115,9 +94,7 @@ if uploaded_file:
     channel = st.selectbox("Select Channel", raw.ch_names)
 
     # ---------------- OPTIONAL SEIZURE TIME ----------------
-    seizure_input = st.text_input(
-        "Seizure Start Time (optional, in seconds)"
-    )
+    seizure_input = st.text_input("Seizure Start Time (optional, in seconds)")
 
     seizure_start = None
     if seizure_input.strip() != "":
@@ -140,22 +117,57 @@ if uploaded_file:
                 st.error("Not enough spikes detected")
             else:
 
-                hyp_time, conf_time, status, prob, _ = \
-                    adaptive_window_detection(spikes, T_total)
-
+                # -------- FULL DETECTION LOOP (FIXED) --------
                 centers, etas = sliding_window_eta(
                     spikes, T_total,
                     window_size=200,
                     step_size=50
                 )
 
+                final_result = None
+                rejected_cases = []
+
+                for i in range(20, len(etas)):
+
+                    hyp_time, conf_time, status, prob, _ = \
+                        adaptive_window_detection(spikes, T_total)
+
+                    if hyp_time is None:
+                        continue
+
+                    if status == "confirmed":
+                        final_result = (hyp_time, conf_time, status, prob)
+                        break
+
+                    elif status == "rejected":
+                        rejected_cases.append((hyp_time, prob))
+
+                if final_result is None:
+                    if rejected_cases:
+                        last = rejected_cases[-1]
+                        final_result = (last[0], None, "rejected", last[1])
+                    else:
+                        final_result = (None, None, "no_detection", 0)
+
+                hyp_time, conf_time, status, prob = final_result
+
                 # ---------------- RESULTS ----------------
                 st.markdown("### Detection Summary")
 
                 st.write(f"**Status:** {status}")
-                st.write(f"**Confidence Score:** {prob:.2f}")
-                st.write(f"**Early Warning Time:** {hyp_time} s")
-                st.write(f"**Confirmation Time:** {conf_time} s")
+
+                if status == "confirmed":
+                    st.write(f"**Confidence Score:** {prob:.2f}")
+                    st.write(f"**Early Warning Time:** {hyp_time} s")
+                    st.write(f"**Confirmation Time:** {conf_time} s")
+
+                elif status == "rejected":
+                    st.warning("Detection rejected (transient activity)")
+                    st.write(f"Rejected at: {hyp_time} s")
+                    st.write(f"Final Probability: {prob:.2f}")
+
+                else:
+                    st.info("No significant detection found")
 
                 # ---------------- VALIDATION ----------------
                 if seizure_start is not None and hyp_time is not None:
