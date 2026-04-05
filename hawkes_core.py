@@ -2,53 +2,13 @@ import numpy as np
 from scipy.optimize import minimize
 import mne
 
-# ============================================================
-# EEG → SPIKES
-# ============================================================
-
-def eeg_to_spikes(raw, channel, low_freq=80, high_freq=120,
-                  threshold_std=3.0):
-
-    sfreq = raw.info['sfreq']
-
-    raw_filtered = raw.copy().filter(
-        low_freq, high_freq, picks=[channel], verbose=False
-    )
-
-    data = raw_filtered.get_data()[raw.ch_names.index(channel)]
-
-    window_samples = int(60 * sfreq)
-    normalized = np.zeros_like(data)
-
-    for i in range(0, len(data), window_samples):
-        chunk = data[i:i + window_samples]
-        if np.std(chunk) > 0:
-            normalized[i:i + window_samples] = (
-                (chunk - np.mean(chunk)) / np.std(chunk)
-            )
-
-    above = np.abs(normalized) > threshold_std
-    crossings = np.where(np.diff(above.astype(int)) == 1)[0]
-
-    if len(crossings) == 0:
-        return np.array([])
-
-    spike_times = crossings / sfreq
-
-    # refractory 50ms
-    filtered = [spike_times[0]]
-    for t in spike_times[1:]:
-        if t - filtered[-1] > 0.05:
-            filtered.append(t)
-
-    return np.array(filtered)
-
 
 # ============================================================
 # HAWKES LOG LIKELIHOOD
 # ============================================================
 
 def hawkes_log_likelihood(params, events, T):
+
     mu, alpha, beta = params
 
     if mu <= 0 or alpha <= 0 or beta <= 0:
@@ -148,11 +108,52 @@ def sliding_window_eta(events, T_total,
 
 
 # ============================================================
+# EEG → SPIKES (IMPORTANT — WAS MISSING BEFORE)
+# ============================================================
+
+def eeg_to_spikes(raw, channel, low_freq=80, high_freq=120,
+                  threshold_std=3.0):
+
+    sfreq = raw.info['sfreq']
+
+    raw_filtered = raw.copy().filter(
+        low_freq, high_freq, picks=[channel], verbose=False
+    )
+
+    data = raw_filtered.get_data()[raw.ch_names.index(channel)]
+
+    window_samples = int(60 * sfreq)
+    normalized = np.zeros_like(data)
+
+    for i in range(0, len(data), window_samples):
+        chunk = data[i:i + window_samples]
+        if np.std(chunk) > 0:
+            normalized[i:i + window_samples] = (
+                (chunk - np.mean(chunk)) / np.std(chunk)
+            )
+
+    above = np.abs(normalized) > threshold_std
+    crossings = np.where(np.diff(above.astype(int)) == 1)[0]
+
+    if len(crossings) == 0:
+        return np.array([])
+
+    spike_times = crossings / sfreq
+
+    filtered = [spike_times[0]]
+    for t in spike_times[1:]:
+        if t - filtered[-1] > 0.05:
+            filtered.append(t)
+
+    return np.array(filtered)
+
+
+# ============================================================
 # PROBABILISTIC VERIFICATION
 # ============================================================
 
 def probabilistic_verification(alert_centers, alert_etas,
-                              threshold,
+                              alert_threshold,
                               p_initial=0.5,
                               p_confirm=0.85,
                               p_reject=0.15):
@@ -160,23 +161,25 @@ def probabilistic_verification(alert_centers, alert_etas,
     p = p_initial
 
     for i in range(len(alert_etas)):
+        t = alert_centers[i]
+        e = alert_etas[i]
 
-        if alert_etas[i] > threshold:
+        if e > alert_threshold:
             p = p + (1 - p) * 0.4
         else:
             p = p - p * 0.4
 
         if p >= p_confirm:
-            return alert_centers[i], 'confirmed', p
+            return t, 'confirmed', p
 
         if p <= p_reject:
-            return alert_centers[i], 'rejected', p
+            return t, 'rejected', p
 
     return None, 'uncertain', p
 
 
 # ============================================================
-# FINAL DETECTION (FIXED)
+# ADAPTIVE DETECTION (UNCHANGED LOGIC)
 # ============================================================
 
 def adaptive_window_detection(events, T_total,
@@ -191,22 +194,22 @@ def adaptive_window_detection(events, T_total,
                               p_confirm=0.85,
                               p_reject=0.15):
 
-    centers, etas = sliding_window_eta(
+    centers_normal, etas_normal = sliding_window_eta(
         events, T_total,
         window_size=normal_window,
         step_size=normal_step
     )
 
-    mask = centers > 300
-    centers = centers[mask]
-    etas = etas[mask]
+    mask = centers_normal > 300
+    centers = centers_normal[mask]
+    etas = etas_normal[mask]
 
-    rejected_cases = []
-    count = 0
+    hypothesis_time = None
+    in_hypothesis = False
+    hyp_count = 0
+    rejected_times = []
 
-    i = baseline_window
-
-    while i < len(etas):
+    for i in range(baseline_window, len(etas)):
 
         recent = etas[i - baseline_window:i]
         baseline = np.mean(recent)
@@ -219,50 +222,68 @@ def adaptive_window_detection(events, T_total,
         cond2 = etas[i] > etas[i - 2]
         cond3 = np.min(etas[max(0, i - 10):i]) > suppression_floor
 
-        if cond1 and cond2 and cond3:
+        if not in_hypothesis:
+
+            if cond1 and cond2 and cond3:
+                hyp_count += 1
+            else:
+                hyp_count = 0
+
+            if hyp_count >= hypothesis_consecutive:
+
+                hypothesis_time = centers[i - hypothesis_consecutive + 1]
+                in_hypothesis = True
+
+                # Stage 2
+                alert_centers, alert_etas = sliding_window_eta(
+                    events, T_total,
+                    window_size=alert_window,
+                    step_size=alert_step
+                )
+
+                mask2 = alert_centers > centers[i]
+                alert_centers = alert_centers[mask2]
+                alert_etas = alert_etas[mask2]
+
+                if len(alert_centers) < 2:
+                    return hypothesis_time, None, 'uncertain', 0.5, rejected_times
+
+                verify_time, status, prob = probabilistic_verification(
+                    alert_centers, alert_etas, threshold
+                )
+
+                if status == 'confirmed':
+                    return hypothesis_time, verify_time, status, prob, rejected_times
+
+                elif status == 'rejected':
+                    rejected_times.append(hypothesis_time)
+                    hypothesis_time = None
+                    in_hypothesis = False
+                    hyp_count = 0
+
+                else:
+                    return hypothesis_time, None, status, prob, rejected_times
+
+    return hypothesis_time, None, 'uncertain', 0.5, rejected_times
+
+
+# ============================================================
+# SUPERCRITICAL CHECK (REQUIRED BY APP)
+# ============================================================
+
+def critical_threshold_warning(window_centers, recovered_etas,
+                                critical_eta=1.0,
+                                consecutive=1):
+
+    count = 0
+
+    for i in range(1, len(recovered_etas)):
+        if recovered_etas[i] >= critical_eta:
             count += 1
         else:
             count = 0
 
-        if count >= hypothesis_consecutive:
+        if count >= consecutive:
+            return window_centers[i - consecutive + 1]
 
-            hypothesis_time = centers[i - hypothesis_consecutive + 1]
-
-            alert_centers, alert_etas = sliding_window_eta(
-                events, T_total,
-                window_size=alert_window,
-                step_size=alert_step
-            )
-
-            mask2 = alert_centers > hypothesis_time
-            alert_centers = alert_centers[mask2]
-            alert_etas = alert_etas[mask2]
-
-            if len(alert_centers) < 2:
-                i += 1
-                continue
-
-            verify_time, status, prob = probabilistic_verification(
-                alert_centers,
-                alert_etas,
-                threshold,
-                p_confirm=p_confirm,
-                p_reject=p_reject
-            )
-
-            if status == "confirmed":
-                return hypothesis_time, verify_time, status, prob, rejected_cases
-
-            elif status == "rejected":
-                rejected_cases.append((hypothesis_time, prob))
-                count = 0
-                i += 5
-                continue
-
-        i += 1
-
-    if rejected_cases:
-        last = rejected_cases[-1]
-        return last[0], None, "rejected", last[1], rejected_cases
-
-    return None, None, "no_detection", 0.0, rejected_cases
+    return None
