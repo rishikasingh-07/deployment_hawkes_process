@@ -117,7 +117,7 @@ if uploaded_file:
                 st.error("Not enough spikes detected")
             else:
 
-                # -------- FULL DETECTION LOOP (FIXED) --------
+                # -------- SLIDING WINDOW --------
                 centers, etas = sliding_window_eta(
                     spikes, T_total,
                     window_size=200,
@@ -127,12 +127,19 @@ if uploaded_file:
                 final_result = None
                 rejected_cases = []
 
-                for i in range(20, len(etas)):
+                i = 20  # start after baseline
+
+                # -------- FIXED DETECTION LOOP --------
+                while i < len(centers):
+
+                    # take only events AFTER current time window
+                    sub_events = spikes[spikes >= centers[i] - 1000]
 
                     hyp_time, conf_time, status, prob, _ = \
-                        adaptive_window_detection(spikes, T_total)
+                        adaptive_window_detection(sub_events, T_total)
 
                     if hyp_time is None:
+                        i += 1
                         continue
 
                     if status == "confirmed":
@@ -142,6 +149,14 @@ if uploaded_file:
                     elif status == "rejected":
                         rejected_cases.append((hyp_time, prob))
 
+                        # 🔥 move forward to avoid same detection
+                        i += 5
+                        continue
+
+                    else:
+                        i += 1
+
+                # fallback
                 if final_result is None:
                     if rejected_cases:
                         last = rejected_cases[-1]
