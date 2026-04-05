@@ -231,16 +231,16 @@ def run_detection(events, T_total, progress_cb=None):
                     return hyp_time, vt, status, fp, rejected, vc, ve
 
                 elif status == 'rejected':
-                    print(f"  REJECTED at t={verify_time:.0f}s"
-                          f" — P(seizure)={final_p:.2f} transient")
+                    print(f"  REJECTED at t={vt:.0f}s"
+                          f" — P(seizure)={fp:.2f} transient")
                     rejected_times.append({
-                        'hypothesis': hypothesis_time,  # t=1750
-                        'rejected_at': verify_time,     # t=1910
-                        'final_p': final_p              # 0.09
+                        'hypothesis': hyp_time,  # t=1750
+                        'rejected_at': vt,     # t=1910
+                        'final_p': fp              # 0.09
                     })
-                    hypothesis_time = None
-                    in_hypothesis   = False
-                    hyp_count       = 0
+                    hyp_time = None
+                    in_hyp   = False
+                    hyp_count  = 0
                 
                 else:
                     return hyp_time, None, status, fp, rejected, vc, ve
